@@ -7,28 +7,57 @@
 //
 
 import UIKit
+import CoreData
 
-class NotebooksListViewController: UIViewController, UITableViewDataSource {
+class NotebooksListViewController: UIViewController {
     /// A table view that displays a list of notebooks
     @IBOutlet weak var tableView: UITableView!
 
-    /// The `Notebook` objects being presented
-    var notebooks: [Notebook] = []
-
+    var dataController:DataController!
+    
+    var listDataSource:ListDataSource<Notebook, NotebookCell>!
+    
+    fileprivate func setupFetchResultsController() {
+        let fetchRequest:NSFetchRequest<Notebook> = Notebook.fetchRequest()
+        let sortDescriptor = NSSortDescriptor(key: "creationDate", ascending: false)
+        fetchRequest.sortDescriptors = [sortDescriptor]
+        
+        listDataSource = ListDataSource(tableView: tableView, managedObjectContext: dataController.viewContext, fetchRequest: fetchRequest, sectionNameKeyPath: nil,
+                                        cacheName: "notebooks", cellReuseIdentifier: NotebookCell.defaultReuseIdentifier, configure: configureCell(cell:entity:))
+        
+        tableView.dataSource = listDataSource
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         navigationItem.titleView = UIImageView(image: #imageLiteral(resourceName: "toolbar-cow"))
         navigationItem.rightBarButtonItem = editButtonItem
-        updateEditButtonState()
     }
 
+    func configureCell(cell: UITableViewCell, entity: NSManagedObject) {
+        if let cell = cell as? NotebookCell,
+            let aNotebook = entity as? Notebook {
+            cell.nameLabel.text = aNotebook.name
+            
+            if let count = aNotebook.notes?.count {
+                let pageString = count == 1 ? "page" : "pages"
+                cell.pageCountLabel.text = "\(String(describing: count)) \(pageString)"
+            }
+        }
+    }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        setupFetchResultsController()
 
         if let indexPath = tableView.indexPathForSelectedRow {
             tableView.deselectRow(at: indexPath, animated: false)
             tableView.reloadRows(at: [indexPath], with: .fade)
         }
+    }
+    
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        listDataSource = nil
     }
 
     // -------------------------------------------------------------------------
@@ -74,24 +103,23 @@ class NotebooksListViewController: UIViewController, UITableViewDataSource {
 
     /// Adds a new notebook to the end of the `notebooks` array
     func addNotebook(name: String) {
-        let notebook = Notebook(name: name)
-        notebooks.append(notebook)
-        tableView.insertRows(at: [IndexPath(row: numberOfNotebooks - 1, section: 0)], with: .fade)
-        updateEditButtonState()
+        let notebook = Notebook(context: dataController.viewContext)
+        notebook.name = name
+        notebook.creationDate = Date()
+        try? dataController.viewContext.save()
     }
 
     /// Deletes the notebook at the specified index path
     func deleteNotebook(at indexPath: IndexPath) {
-        notebooks.remove(at: indexPath.row)
-        tableView.deleteRows(at: [indexPath], with: .fade)
-        if numberOfNotebooks == 0 {
-            setEditing(false, animated: true)
-        }
-        updateEditButtonState()
+        let notebookToDelete = listDataSource.fetchedResultsController.object(at: indexPath)
+        dataController.viewContext.delete(notebookToDelete)
+        try? dataController.viewContext.save()
     }
 
     func updateEditButtonState() {
-        navigationItem.rightBarButtonItem?.isEnabled = numberOfNotebooks > 0
+        if let sections = listDataSource.fetchedResultsController.sections {
+            navigationItem.rightBarButtonItem?.isEnabled = sections[0].numberOfObjects > 0
+        }
     }
 
     override func setEditing(_ editing: Bool, animated: Bool) {
@@ -102,39 +130,33 @@ class NotebooksListViewController: UIViewController, UITableViewDataSource {
     // -------------------------------------------------------------------------
     // MARK: - Table view data source
 
-    func numberOfSections(in tableView: UITableView) -> Int {
-        return 1
-    }
-
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return numberOfNotebooks
-    }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let aNotebook = notebook(at: indexPath)
-        let cell = tableView.dequeueReusableCell(withIdentifier: NotebookCell.defaultReuseIdentifier, for: indexPath) as! NotebookCell
-
-        // Configure cell
-        cell.nameLabel.text = aNotebook.name
-        let pageString = aNotebook.notes.count == 1 ? "page" : "pages"
-        cell.pageCountLabel.text = "\(aNotebook.notes.count) \(pageString)"
-
-        return cell
-    }
+//    func numberOfSections(in tableView: UITableView) -> Int {
+//        return listDataSource.fetchedResultsController.sections?.count ?? 1
+//    }
+//
+//    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+//        return listDataSource.fetchedResultsController.sections?[section].numberOfObjects ?? 0
+//    }
+//
+//    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+//        let aNotebook = fetchedResultsController.object(at: indexPath)
+//        let cell = tableView.dequeueReusableCell(withIdentifier: NotebookCell.defaultReuseIdentifier, for: indexPath) as! NotebookCell
+//
+//        // Configure cell
+//        cell.nameLabel.text = aNotebook.name
+//
+//        if let count = aNotebook.notes?.count {
+//            let pageString = count == 1 ? "page" : "pages"
+//            cell.pageCountLabel.text = "\(String(describing: count)) \(pageString)"
+//        }
+//        return cell
+//    }
 
     func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
         switch editingStyle {
         case .delete: deleteNotebook(at: indexPath)
         default: () // Unsupported
         }
-    }
-
-    // Helper
-
-    var numberOfNotebooks: Int { return notebooks.count }
-
-    func notebook(at indexPath: IndexPath) -> Notebook {
-        return notebooks[indexPath.row]
     }
 
     // -------------------------------------------------------------------------
@@ -144,8 +166,51 @@ class NotebooksListViewController: UIViewController, UITableViewDataSource {
         // If this is a NotesListViewController, we'll configure its `Notebook`
         if let vc = segue.destination as? NotesListViewController {
             if let indexPath = tableView.indexPathForSelectedRow {
-                vc.notebook = notebook(at: indexPath)
+                vc.notebook = listDataSource.fetchedResultsController.object(at: indexPath)
+                vc.dataController = dataController
             }
         }
     }
 }
+
+
+//extension NotebooksListViewController: NSFetchedResultsControllerDelegate {
+//    func controllerWillChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
+//        tableView.beginUpdates()
+//    }
+//
+//    func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
+//        tableView.endUpdates()
+//    }
+//
+//    func controller(_ controller: NSFetchedResultsController<NSFetchRequestResult>, didChange anObject: Any, at indexPath: IndexPath?, for type: NSFetchedResultsChangeType, newIndexPath: IndexPath?) {
+//        switch type {
+//        case .insert:
+//            tableView.insertRows(at: [newIndexPath!], with: .fade)
+//            break
+//        case .delete:
+//            tableView.deleteRows(at: [indexPath!], with: .fade)
+//            break;
+//        case .update:
+//            tableView.reloadRows(at: [indexPath!], with: .fade)
+//            break;
+//        case .move:
+//            tableView.moveRow(at: indexPath!, to: newIndexPath!)
+//            break
+//        default:
+//            break;
+//        }
+//    }
+//
+//    func controller(_ controller: NSFetchedResultsController<NSFetchRequestResult>, didChange sectionInfo: NSFetchedResultsSectionInfo, atSectionIndex sectionIndex: Int, for type: NSFetchedResultsChangeType) {
+//        let indexSet = IndexSet(integer: sectionIndex)
+//        switch type {
+//        case .insert: tableView.insertSections(indexSet, with: .fade)
+//        case .delete: tableView.deleteSections(indexSet, with: .fade)
+//        case .update, .move:
+//            fatalError("Invalid change type in controller(_:didChange:atSectionIndex:for:). Only .insert or .delete should be possible.")
+//        default:
+//            break;
+//        }
+//    }
+//}
